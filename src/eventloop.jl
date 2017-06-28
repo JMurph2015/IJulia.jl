@@ -18,11 +18,8 @@ function eventloop(socket)
                 end
             finally
                 @async begin
-                    if check_interact_loaded() && idle_delay[] < interact_min_delay
-                        sleep(interact_min_delay-idle_delay[])
-                    end
-                    if idle_delay[] > 0
-                        sleep(idle_delay[])
+                    if isdefined(Main, :Interact)
+                        sleep(interact_min_delay)
                     end
                     # Dead channels tell no tales
                     filter!(e->e.state == :open, hold_channels)
@@ -60,11 +57,6 @@ function waitloop()
     end
 end
 
-const idle_delay = Ref(0)
-function set_idle_delay(delay_secs::Float64=0.5)
-    idle_delay[] = delay_secs
-end
-
 #=
     Hold Channel Interface
     This allows user processes to register and deregister
@@ -79,8 +71,13 @@ end
     buffer and removed after the wait process.
     See wait_multi_with_timeout()
 =#
+# Interact.jl band-aid compatibility code.
+const interact_min_delay = 0.25
+
+# Channel constants
 const hold_channels = Array{Channel{Bool},1}()
 const hold_channels_timeout_default = 3
+
 function add_hold_channel(channel::Channel{Bool})
     if !(channel in hold_channels)
         hold_channels = [hold_channels..., channel]
@@ -119,13 +116,4 @@ function wait_multi_with_timeout(channels::Array{Channel{Bool},1}, timeout::Numb
         wait(channel)
     end
     put!(notification, true)
-end
-
-#= Interact.jl compatibility code
-    This ensures the existing fix continues to work with Interact.jl until
-    they can update to using the new semaphore or channel interface.
-=#
-const interact_min_delay = 0.25
-function check_interact_loaded()
-    return isdefined(:Interact)
 end
