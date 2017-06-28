@@ -18,7 +18,17 @@ function eventloop(socket)
                 end
             finally
                 @async begin
-                    sleep(idle_delay[])
+                    if check_interact_loaded() && idle_delay[] < 0.5
+                        set_idle_delay(0.5)
+                    end
+                    if idle_delay[] > 0
+                        sleep(idle_delay[])
+                    end
+                    for channel in hold_channels
+                        wait(channel)
+                    end
+                    # alt code for Julia 0.6+
+                    # wait.(hold_channels)
                     flush_all()
                     send_status("idle", msg)
                 end
@@ -52,7 +62,19 @@ function waitloop()
     end
 end
 
-const idle_delay = Ref(0.5)
+const idle_delay = Ref(0)
 function set_idle_delay(delay_secs::Float64=0.5)
     idle_delay[] = delay_secs
+end
+
+const hold_channels = Array{Channel{Bool},1}()
+function add_hold_channel(channel::Channel{Bool})
+    if !(channel in hold_channels)
+        hold_channels = [hold_channels..., channel]
+    end
+end
+
+# Interact.jl compatibility code
+function check_interact_loaded()
+    return isdefined(:Interact)
 end
