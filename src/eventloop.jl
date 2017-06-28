@@ -18,8 +18,8 @@ function eventloop(socket)
                 end
             finally
                 @async begin
-                    if check_interact_loaded() && idle_delay[] < 0.5
-                        set_idle_delay(0.5)
+                    if check_interact_loaded() && idle_delay[] < interact_min_delay
+                        sleep(interact_min_delay-idle_delay[])
                     end
                     if idle_delay[] > 0
                         sleep(idle_delay[])
@@ -74,7 +74,14 @@ function add_hold_channel(channel::Channel{Bool})
     end
 end
 
+function remove_hold_channel(channel::Channel{Bool})
+    if channel in hold_channels
+        filter!(e->e∉[channel],hold_channels)
+    end
+end
+
 # Interact.jl compatibility code
+const interact_min_delay = 0.25
 function check_interact_loaded()
     return isdefined(:Interact)
 end
