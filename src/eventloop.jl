@@ -65,6 +65,20 @@ function set_idle_delay(delay_secs::Float64=0.5)
     idle_delay[] = delay_secs
 end
 
+#=
+    Hold Channel Interface
+    This allows user processes to register and deregister
+    channels that allow user code to hold IJulia from sending
+    the idle status message until signaled.  This would have
+    been prettier if there were level-triggered events in
+    Julia base, but this will do okay for now.
+
+    Users should reset their own channels as IJulia will not
+    reach into their channel state manually unless there is a
+    timeout, in which case a temporary variable is put onto the channel
+    buffer and removed after the wait process.
+    See wait_multi_with_timeout()
+=#
 const hold_channels = Array{Channel{Bool},1}()
 const hold_channels_timeout_default = 3
 function add_hold_channel(channel::Channel{Bool})
@@ -107,7 +121,10 @@ function wait_multi_with_timeout(channels::Array{Channel{Bool},1}, timeout::Numb
     put!(notification, true)
 end
 
-# Interact.jl compatibility code
+#= Interact.jl compatibility code
+    This ensures the existing fix continues to work with Interact.jl until
+    they can update to using the new semaphore or channel interface.
+=#
 const interact_min_delay = 0.25
 function check_interact_loaded()
     return isdefined(:Interact)
