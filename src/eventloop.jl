@@ -24,11 +24,9 @@ function eventloop(socket)
                     if idle_delay[] > 0
                         sleep(idle_delay[])
                     end
-                    for channel in hold_channels
-                        wait(channel)
-                    end
-                    # alt code for Julia 0.6+
-                    # wait.(hold_channels)
+                    # Dead channels tell no tales
+                    filter!(e->e.state == :open, hold_channels)
+                    wait_multi_with_timeout(hold_channels, hold_channels_timeout_default)
                     flush_all()
                     send_status("idle", msg)
                 end
@@ -68,6 +66,7 @@ function set_idle_delay(delay_secs::Float64=0.5)
 end
 
 const hold_channels = Array{Channel{Bool},1}()
+const hold_channels_timeout_default = 3
 function add_hold_channel(channel::Channel{Bool})
     if !(channel in hold_channels)
         hold_channels = [hold_channels..., channel]
@@ -78,6 +77,34 @@ function remove_hold_channel(channel::Channel{Bool})
     if channel in hold_channels
         filter!(e->e∉[channel],hold_channels)
     end
+end
+
+function wait_multi_with_timeout(channels::Array{Channel{Bool},1}, timeout::Number)
+    notification = Channel{Bool}(1)
+    #=
+        This async routine will manually fulfill any channels (aka semaphores)
+        that don't come through before the timeout.  Doing this because someone
+        will inevitably not fulfill the semaphores that they register, and
+        thus this will take care of us, at least for the short term.
+    =#
+    @async begin
+        sleep(timeout)
+        idxs_to_reset = []
+        for i in eachindex(channels)
+            if length(channels[i].data) == 0
+                put!(false)
+                idxs_to_reset = [idxs_to_reset..., i]
+            end
+        end
+        wait(notification)
+        for i in idxs_to_reset
+            take!(channels[i])
+        end
+    end
+    for channel in channels
+        wait(channel)
+    end
+    put!(notification, true)
 end
 
 # Interact.jl compatibility code
