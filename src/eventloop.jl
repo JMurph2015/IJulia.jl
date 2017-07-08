@@ -181,7 +181,7 @@ function wait_multi_with_timeout(events::Array{Event,1}, timeout::Number)
             end
         if reset
             idxs_to_reset = Array{Int64, 1}()
-            for i in eachindex(events):
+            for i in eachindex(events)
                 if !is_set(events[i])
                     notify(event)
                     push!(idxs_to_reset, i)
