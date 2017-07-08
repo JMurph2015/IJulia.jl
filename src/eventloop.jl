@@ -18,17 +18,17 @@ function eventloop(socket)
                 end
             finally
                 @async begin
-                    notify(idle_event)
+                    notify(idle_ready_event)
                     if isdefined(Main, :Interact)
                         sleep(interact_min_delay)
                     end
                     # Dead events tell no tales
-                    filter!(e->e.state == :open, hold_events)
-                    wait_multi_with_timeout(hold_events, hold_events_timeout_default)
+                    filter!(e->e.state == :open, idle_hold_events)
+                    wait.(idle_hold_events)
                     flush_all()
                     send_status("idle", msg)
-                    clear(idle_event)
-                    clear_temp_holds!(hold_events)
+                    clear(idle_ready_event)
+                    clear_temp_holds!(idle_hold_events)
                 end
             end
         end
@@ -108,35 +108,63 @@ end
     been prettier if there were level-triggered events in
     Julia base, but this will do okay for now.
 
-    Users should reset their own channels as IJulia will not
-    reach into their channel state manually unless there is a
-    timeout, in which case a temporary variable is put onto the channel
-    buffer and removed after the wait process.
-    See wait_multi_with_timeout()
+    Users have the option of making a 'persistent hold' or
+    a 'temporary hold'.  The difference between the two is
+    that IJulia will clear temporary holds on every idle
+    send.
 =#
 # Interact.jl band-aid compatibility code.
 const interact_min_delay = 0.25
 
 # Channel constants
-const hold_events = Array{Event,1}()
-const idle_event = Event(false)
+const idle_hold_events = Array{Event,1}()
+const idle_ready_event = Event(false)
 const hold_events_timeout_default = 3
 
+"""
+    `wait_for_idle_ready()``
+
+    This function blocks until IJulia is ready to send another
+    idle status message, before any holds are awaited.
+    Use this function to hook into IJulia to reactively hold
+    it (or do other things) as it sends an idle message.
+
+    Note: Holds initiated or cleared after this function
+    reuturns will have a race condition with IJulia waiting on them.
+    Therefore, reactionary code should be set up to hold IJulia by
+    default and reactionarily do things with that block in place.
+"""
 function wait_for_idle_ready()
     return wait(idle_event)
 end
+
+"""
+    This function is used to add a signal of type Event to block
+    IJulia from sending an idle status reply until after the event
+    has been set via `notify(event)`.
+"""
 function add_hold_event(event::Event)
     if !(event in hold_events)
         hold_events = [hold_events..., event]
     end
 end
+
+"""
+    This function removes an event from IJulia's array of known
+    events, and thus stops IJulia from waiting on the event.
+    The event supplied must be a reference to the same oject 
+    as was registered.
+"""
 function remove_hold_event(event::Event)
     if event in hold_events
-        filter!(e->e∉[event],hold_events)
+        filter!(e->e != event,hold_events)
     end
 end
+
+# On the ropse, removed from main loop, but still an option.
 function wait_multi_with_timeout(events::Array{Event,1}, timeout::Number)
     notification = Event(false)
+    response = Event(false)
     #=
         This async routine will manually fulfill any events (aka semaphores)
         that don't come through before the timeout.  Doing this because someone
@@ -145,16 +173,24 @@ function wait_multi_with_timeout(events::Array{Event,1}, timeout::Number)
     =#
     @async begin
         sleep(timeout)
-        idxs_to_reset = []
-        for i in eachindex(events)
-            if !is_set(events[i])
-                notify(events[i])
-                idxs_to_reset = [idxs_to_reset..., i]
+        reset = true
+        for i in 1:ceil(Int, timeout/0.001)
+            if (sum(is_set.(events)) == length(events))
+                reset = false
+                break
             end
-        end
-        wait(notification)
-        for i in idxs_to_reset
-            clear(events[i])
+        if reset
+            idxs_to_reset = Array{Int64, 1}()
+            for i in eachindex(events):
+                if !is_set(events[i])
+                    notify(event)
+                    push!(idxs_to_reset, i)
+                end
+            end
+            wait(notification)
+            for i in idxs_to_reset
+                clear(events[i])
+            end
         end
     end
     for event in events
