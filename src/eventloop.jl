@@ -18,14 +18,16 @@ function eventloop(socket)
                 end
             finally
                 @async begin
+                    notify(idle_event)
                     if isdefined(Main, :Interact)
                         sleep(interact_min_delay)
                     end
-                    # Dead channels tell no tales
-                    filter!(e->e.state == :open, hold_channels)
-                    wait_multi_with_timeout(hold_channels, hold_channels_timeout_default)
+                    # Dead events tell no tales
+                    filter!(e->e.state == :open, hold_events)
+                    wait_multi_with_timeout(hold_events, hold_events_timeout_default)
                     flush_all()
                     send_status("idle", msg)
+                    clear(idle_event)
                 end
             end
         end
@@ -57,6 +59,38 @@ function waitloop()
     end
 end
 
+
+mutable struct Event
+    channel::Channel{Bool}
+    state::Ref{Symbol}
+    function Event()
+        c = Channel{Bool}(1)
+        s = Ref{Symbol}(c.state)
+        x = new(c, s)
+    end
+end
+function notify(x::Event) 
+    if length(x.channel) < 1
+        put!(x.channel, true)
+        return true
+    else
+        return false
+    end
+end
+function clear(x::Event)
+    if length(x.channel) > 0
+        take!(x.channel)
+        return true
+    else
+        return false
+    end
+end
+function close(x::Event)
+    x.state = :closed
+    close(x.channel)
+end
+wait(x::Event) = wait(x.channel)
+
 #=
     Hold Channel Interface
     This allows user processes to register and deregister
@@ -75,25 +109,30 @@ end
 const interact_min_delay = 0.25
 
 # Channel constants
-const hold_channels = Array{Channel{Bool},1}()
-const hold_channels_timeout_default = 3
+const hold_events = Array{Event,1}()
+const idle_event = Event(1)
+const hold_events_timeout_default = 3
 
-function add_hold_channel(channel::Channel{Bool})
-    if !(channel in hold_channels)
-        hold_channels = [hold_channels..., channel]
+function wait_for_idle_ready()
+    return wait(idle_event)
+end
+
+function add_hold_event(event::Event)
+    if !(event in hold_events)
+        hold_events = [hold_events..., event]
     end
 end
 
-function remove_hold_channel(channel::Channel{Bool})
-    if channel in hold_channels
-        filter!(e->e∉[channel],hold_channels)
+function remove_hold_event(event::Event)
+    if event in hold_events
+        filter!(e->e∉[event],hold_events)
     end
 end
 
-function wait_multi_with_timeout(channels::Array{Channel{Bool},1}, timeout::Number)
-    notification = Channel{Bool}(1)
+function wait_multi_with_timeout(events::Array{Event,1}, timeout::Number)
+    notification = Event(1)
     #=
-        This async routine will manually fulfill any channels (aka semaphores)
+        This async routine will manually fulfill any events (aka semaphores)
         that don't come through before the timeout.  Doing this because someone
         will inevitably not fulfill the semaphores that they register, and
         thus this will take care of us, at least for the short term.
@@ -101,19 +140,19 @@ function wait_multi_with_timeout(channels::Array{Channel{Bool},1}, timeout::Numb
     @async begin
         sleep(timeout)
         idxs_to_reset = []
-        for i in eachindex(channels)
-            if length(channels[i].data) == 0
+        for i in eachindex(events)
+            if length(events[i].data) == 0
                 put!(false)
                 idxs_to_reset = [idxs_to_reset..., i]
             end
         end
         wait(notification)
         for i in idxs_to_reset
-            take!(channels[i])
+            take!(events[i])
         end
     end
-    for channel in channels
-        wait(channel)
+    for event in events
+        wait(event)
     end
     put!(notification, true)
 end
