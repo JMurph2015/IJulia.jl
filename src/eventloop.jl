@@ -179,6 +179,7 @@ function wait_multi_with_timeout(events::Array{Event,1}, timeout::Number)
                 reset = false
                 break
             end
+        end
         if reset
             idxs_to_reset = Array{Int64, 1}()
             for i in eachindex(events)
