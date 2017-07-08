@@ -170,4 +170,5 @@ function clear_temp_holds!(events::Array{Event,1})
         if !event.persistent
             clear(event)
         end
+    end
 end
