@@ -28,6 +28,7 @@ function eventloop(socket)
                     flush_all()
                     send_status("idle", msg)
                     clear(idle_event)
+                    clear_temp_holds!(hold_events)
                 end
             end
         end
@@ -62,15 +63,16 @@ end
 
 mutable struct Event
     channel::Channel{Bool}
-    state::Ref{Symbol}
-    function Event()
+    state::Symbol
+    persistent::Bool
+    function Event(p::Bool)
         c = Channel{Bool}(1)
-        s = Ref{Symbol}(c.state)
-        x = new(c, s)
+        s = c.state
+        x = new(c, s, p)
     end
 end
 function notify(x::Event) 
-    if length(x.channel) < 1
+    if length(x.channel.data) < 1
         put!(x.channel, true)
         return true
     else
@@ -78,7 +80,7 @@ function notify(x::Event)
     end
 end
 function clear(x::Event)
-    if length(x.channel) > 0
+    if length(x.channel.data) > 0
         take!(x.channel)
         return true
     else
@@ -89,7 +91,14 @@ function close(x::Event)
     x.state = :closed
     close(x.channel)
 end
-wait(x::Event) = wait(x.channel)
+function is_set(x::Event)
+    return length(x.channel.data) > 0
+end
+function wait(x::Event)
+    if !(length(x.channel.data) > 0)
+        wait(x.channel)
+    end      
+end
 
 #=
     Hold Channel Interface
@@ -110,27 +119,24 @@ const interact_min_delay = 0.25
 
 # Channel constants
 const hold_events = Array{Event,1}()
-const idle_event = Event(1)
+const idle_event = Event(false)
 const hold_events_timeout_default = 3
 
 function wait_for_idle_ready()
     return wait(idle_event)
 end
-
 function add_hold_event(event::Event)
     if !(event in hold_events)
         hold_events = [hold_events..., event]
     end
 end
-
 function remove_hold_event(event::Event)
     if event in hold_events
         filter!(e->e∉[event],hold_events)
     end
 end
-
 function wait_multi_with_timeout(events::Array{Event,1}, timeout::Number)
-    notification = Event(1)
+    notification = Event(false)
     #=
         This async routine will manually fulfill any events (aka semaphores)
         that don't come through before the timeout.  Doing this because someone
@@ -141,18 +147,29 @@ function wait_multi_with_timeout(events::Array{Event,1}, timeout::Number)
         sleep(timeout)
         idxs_to_reset = []
         for i in eachindex(events)
-            if length(events[i].data) == 0
-                put!(false)
+            if !is_set(events[i])
+                notify(events[i])
                 idxs_to_reset = [idxs_to_reset..., i]
             end
         end
         wait(notification)
         for i in idxs_to_reset
-            take!(events[i])
+            clear(events[i])
         end
     end
     for event in events
         wait(event)
     end
-    put!(notification, true)
+    notify(notification)
+end
+
+# Here I realized that without some way of clearing
+# Events deterministically from IJulia's side,
+# we would create race conditions all over the place.
+function clear_temp_holds!(events::Array{Event,1})
+    for event in events
+        if !event.persistent
+            clear(event)
+        end
+    end
 end
