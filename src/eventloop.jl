@@ -93,6 +93,7 @@ function close(x::Event)
 end
 function is_set(x::Event)
     return length(x.channel.data) > 0
+end
 function wait(x::Event)
     if !(length(x.channel.data) > 0)
         wait(x.channel)
