@@ -62,7 +62,6 @@ const interact_min_delay = 0.25
 const idle_hold_cond = LevelTrigger()
 const idle_ready_event = LevelTrigger()
 
-<<<<<<< HEAD
 """
     Increment the semaphore to hold IJulia from sending the "status":"idle" message.
 """
