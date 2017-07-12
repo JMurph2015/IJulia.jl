@@ -18,17 +18,14 @@ function eventloop(socket)
                 end
             finally
                 @async begin
-                    if check_interact_loaded() && idle_delay[] < interact_min_delay
-                        sleep(interact_min_delay-idle_delay[])
+                    idle_ready_event += 1
+                    if isdefined(Main, :Interact)
+                        sleep(interact_min_delay)
                     end
-                    if idle_delay[] > 0
-                        sleep(idle_delay[])
-                    end
-                    # Dead channels tell no tales
-                    filter!(e->e.state == :open, hold_channels)
-                    wait_multi_with_timeout(hold_channels, hold_channels_timeout_default)
+                    wait(idle_hold_cond)
                     flush_all()
                     send_status("idle", msg)
+                    idle_ready_event -= 1
                 end
             end
         end
@@ -60,72 +57,41 @@ function waitloop()
     end
 end
 
-const idle_delay = Ref(0)
-function set_idle_delay(delay_secs::Float64=0.5)
-    idle_delay[] = delay_secs
-end
-
-#=
-    Hold Channel Interface
-    This allows user processes to register and deregister
-    channels that allow user code to hold IJulia from sending
-    the idle status message until signaled.  This would have
-    been prettier if there were level-triggered events in
-    Julia base, but this will do okay for now.
-
-    Users should reset their own channels as IJulia will not
-    reach into their channel state manually unless there is a
-    timeout, in which case a temporary variable is put onto the channel
-    buffer and removed after the wait process.
-    See wait_multi_with_timeout()
-=#
-const hold_channels = Array{Channel{Bool},1}()
-const hold_channels_timeout_default = 3
-function add_hold_channel(channel::Channel{Bool})
-    if !(channel in hold_channels)
-        hold_channels = [hold_channels..., channel]
-    end
-end
-
-function remove_hold_channel(channel::Channel{Bool})
-    if channel in hold_channels
-        filter!(e->e∉[channel],hold_channels)
-    end
-end
-
-function wait_multi_with_timeout(channels::Array{Channel{Bool},1}, timeout::Number)
-    notification = Channel{Bool}(1)
-    #=
-        This async routine will manually fulfill any channels (aka semaphores)
-        that don't come through before the timeout.  Doing this because someone
-        will inevitably not fulfill the semaphores that they register, and
-        thus this will take care of us, at least for the short term.
-    =#
-    @async begin
-        sleep(timeout)
-        idxs_to_reset = []
-        for i in eachindex(channels)
-            if length(channels[i].data) == 0
-                put!(false)
-                idxs_to_reset = [idxs_to_reset..., i]
-            end
-        end
-        wait(notification)
-        for i in idxs_to_reset
-            take!(channels[i])
-        end
-    end
-    for channel in channels
-        wait(channel)
-    end
-    put!(notification, true)
-end
-
-#= Interact.jl compatibility code
-    This ensures the existing fix continues to work with Interact.jl until
-    they can update to using the new semaphore or channel interface.
-=#
+# Interact.jl band-aid compatibility code.
 const interact_min_delay = 0.25
-function check_interact_loaded()
-    return isdefined(:Interact)
+
+const idle_hold_cond = LevelTrigger()
+const idle_ready_event = LevelTrigger()
+
+"""
+    Increment the semaphore to hold IJulia from sending the "status":"idle" message.
+"""
+function busy()
+    idle_hold_cond += 1
 end
+"""
+    Decrement the semaphore that holds IJulia from sending the "status":"idle" message.
+"""
+function idle()
+    idle_hold_cond -= 1
+end
+"""
+    Wait until IJulia is ready to send an "status":"idle" message.
+"""
+function wait_for_ready()
+    wait(idle_ready_event)
+end
+
+# Define an even more simpler level triggered event so that we can easily wait on it.
+import Base.+, Base.-, Base.notify, Base.wait
+mutable struct LevelTrigger
+    state::Ref{Int}
+    cond::Condition
+    LevelTrigger() = new(Ref(0), Condition())
+end
+notify(x::LevelTrigger) = notify(x.cond)
+wait(x::LevelTrigger) = (x.state[] > 0 ? wait(x.cond) : Void; Void)
++(x::LevelTrigger, y::Any) = (x.state[]+=y;x)::LevelTrigger
++(y::Any, x::LevelTrigger) = +(x,y)::LevelTrigger
+-(x::LevelTrigger, y::Any) = (x.state[]-=y; x.state[] <= 0 ? notify(x) : Void; x)::LevelTrigger
+-(y::Any, x::LevelTrigger) = y-x.state[]
