@@ -59,10 +59,10 @@ end
 
 # Interact.jl band-aid compatibility code.
 const interact_min_delay = 0.25
-
 const idle_hold_cond = LevelTrigger()
 const idle_ready_event = LevelTrigger()
 
+<<<<<<< HEAD
 """
     Increment the semaphore to hold IJulia from sending the "status":"idle" message.
 """
@@ -82,7 +82,7 @@ function wait_for_ready()
     wait(idle_ready_event)
 end
 
-# Define an even more simpler level triggered event so that we can easily wait on it.
+# Define an even more simple level triggered event so that we can easily wait on it.
 import Base.+, Base.-, Base.notify, Base.wait
 mutable struct LevelTrigger
     state::Ref{Int}
