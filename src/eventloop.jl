@@ -18,14 +18,14 @@ function eventloop(socket)
                 end
             finally
                 @async begin
-                    idle_ready_event += 1
+                    readycount[] = 1
                     if isdefined(Main, :Interact)
                         sleep(interact_min_delay)
                     end
-                    wait(idle_hold_cond)
+                    wait(idlecond)
                     flush_all()
                     send_status("idle", msg)
-                    idle_ready_event -= 1
+                    readycount[] = 0
                 end
             end
         end
@@ -59,38 +59,54 @@ end
 
 # Interact.jl band-aid compatibility code.
 const interact_min_delay = 0.25
-const idle_hold_cond = LevelTrigger()
-const idle_ready_event = LevelTrigger()
+const busycount = Ref(0)
+const readycount = Ref(0)
+const idlecond = Condition()
+const readycond = Condition()
 
 """
-    Increment the semaphore to hold IJulia from sending the "status":"idle" message.
+    IJulia.busy()
+    Add to IJulia's lock preventing it from sending the idle condition.
+    This is intended for scenarios where output will be streamed asynchronously
+    to a Jupyter notebook.
 """
 function busy()
-    idle_hold_cond += 1
+    busycount[] += 1
 end
 """
-    Decrement the semaphore that holds IJulia from sending the "status":"idle" message.
+    IJulia.idle()
+    Decrement IJulia's lock holding the idle status reply.
+    Use this to allow IJulia to send idle signals.
 """
 function idle()
-    idle_hold_cond -= 1
-end
-"""
-    Wait until IJulia is ready to send an "status":"idle" message.
-"""
-function wait_for_ready()
-    wait(idle_ready_event)
+    busycount[] -= 1
+    notify(idlecond)
 end
 
-# Define an even more simple level triggered event so that we can easily wait on it.
-import Base.+, Base.-, Base.notify, Base.wait
-mutable struct LevelTrigger
-    state::Ref{Int}
-    cond::Condition
-    LevelTrigger() = new(Ref(0), Condition())
+function waitidle()
+    while busycount[] > 0
+        wait(idlecond)
+    end
 end
-notify(x::LevelTrigger) = notify(x.cond)
-wait(x::LevelTrigger) = (x.state[] > 0 ? wait(x.cond) : Void; Void)
-+(x::LevelTrigger, y::Any) = (x.state[]+=y;x)::LevelTrigger
-+(y::Any, x::LevelTrigger) = +(x,y)::LevelTrigger
--(x::LevelTrigger, y::Any) = (x.state[]-=y; x.state[] <= 0 ? notify(x) : Void; x)::LevelTrigger
--(y::Any, x::LevelTrigger) = y-x.state[]
+
+"""
+    wait_for_ready()
+    This function blocks until IJulia is preparing to send an idle message.
+    Use this to reactively hold IJulia from sending an idle status.
+    For instance, the code below starts a task that persistently delays
+    IJulia's idle signals by at least 0.5 seconds.
+    @async begin
+        while true
+            IJulia.wait_for_ready()
+            IJulia.busy()
+            sleep(0.5)
+            IJulia.idle()
+        end
+    end
+"""
+function wait_for_ready()
+    while readycount[] <= 0
+        wait(readycond)
+    end
+end
+        
